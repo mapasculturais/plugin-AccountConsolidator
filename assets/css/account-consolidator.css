@@ -1,0 +1,14 @@
+.action-convertToCollective table thead {
+    position: sticky;
+    top:0;
+    background-color: #ffe8e8;
+    font-weight: bold;
+}
+.action-convertToCollective table td {
+    padding: 5px;
+    border: 1px solid black;
+}
+
+.action-convertToCollective table tbody tr:hover td {
+    background-color: #dedede;
+}
