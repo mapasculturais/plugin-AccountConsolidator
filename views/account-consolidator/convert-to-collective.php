@@ -6,7 +6,7 @@
  */
 
 ?>
-<form method="POST" action="fixAgents">
+<form method="POST" action="convertToCollective">
 <table>
     <thead>
         <tr>

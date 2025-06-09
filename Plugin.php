@@ -6,6 +6,7 @@ use Doctrine\DBAL\Exception;
 use MapasCulturais\App;
 use MapasCulturais\Connection;
 use MapasCulturais\Entities\Agent;
+use MapasCulturais\Entities\User;
 use MapasCulturais\Plugin as MapasCulturaisPlugin;
 use Symfony\Component\VarDumper\Cloner\VarCloner;
 
@@ -61,6 +62,63 @@ class Plugin extends MapasCulturaisPlugin
         $app->registerController('account-consolidator', Controller::class);
 
         Controller::$plugin = $this;
+    }
+
+    const ACTION_MERGE_AGENTS = 'merge agents';
+    const ACTION_DELETE_EMPTY_USER = 'delete empty user';
+    const ACTION_DELETE_EMPTY_SUBAGENT = 'delete empty agent';
+    const ACTION_CONVERT_AGENT_TO_COLLECTIVE = 'convert to collective';
+    const ACTION_MERGE_DUPLICATED_AGENTS = 'merge duplicated agents'; 
+    const ACTION_SUBAGENT_NEW_USER = 'subagent new user';
+    const ACTION_FIX_SUBAGENT = 'fix subagent';
+    const ACTION_TRANSFER_ENTITIES_OF_SUBAGENT = 'transfer subagent entities';
+
+    function log($action_type, $data) {
+        $app = App::i();
+        switch($action_type){
+            case self::ACTION_MERGE_AGENTS:
+                $to_delete = $data['to_delete'];
+                $to_preserve = $data['to_preserve'];
+
+                $app->log->debug("AGENTE #{$to_delete->agent_id} ({$to_delete->agent_name}) MESCLADO COM #{$to_preserve->id} ({$to_preserve->name})");
+                break;
+
+            case self::ACTION_DELETE_EMPTY_USER: 
+                $app->log->debug("USUÁRIO VAZIO REMOVIDO #{$data->user_id} - {$data->user_email}");
+                break;
+
+            case self::ACTION_MERGE_DUPLICATED_AGENTS:
+                $agent_ids = implode(',', array_keys($data->agents));
+                
+                $app->log->debug("-------------------------------------- $data->count / $data->total ($data->percentage)");
+                $app->log->debug("SIMILARIDADES ENTRE AGENTES $agent_ids");
+                
+                foreach($data->similarities as $ids => $similarities) {
+                    foreach($similarities as $fields => $values) {
+                        $percentage = number_format($values[0],1) . '%';
+                        $string = "---> $ids ($fields) $percentage [{$values[1]} <=> {$values[2]}]";
+
+                        $app->log->debug($string);
+                    }
+                }
+                break;
+            case self::ACTION_FIX_SUBAGENT:
+                $app->log->debug("----------------------------------------- $data->num / $data->total ($data->percentage)");
+                $app->log->debug("CORRIGINDO SUBAGENTE #{$data->agent_id} ($data->agent_name)");
+                break;
+
+            case self::ACTION_SUBAGENT_NEW_USER: 
+                $app->log->debug("-> novo usuário #$data->id ($data->email)");
+                break;
+            
+            case self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT:
+                $app->log->debug("-> transferindo entidades");
+                break;
+
+            case self::ACTION_DELETE_EMPTY_SUBAGENT:
+                $app->log->debug("-> removido subagente");
+                break; 
+        }
     }
 
     function isACollectiveName(?string $name): bool
@@ -335,6 +393,7 @@ class Plugin extends MapasCulturaisPlugin
         $conn = $this->conn;
         $conn->beginTransaction();
 
+        /** @var User */
         $user = $app->repo('User')->find($user_def->user_id);
 
         if (!$user_def->new_profile_agente) {
@@ -364,7 +423,7 @@ class Plugin extends MapasCulturaisPlugin
      * @return array 
      * @throws Exception 
      */
-    function fetchAgents(): array
+    function fetchAgents($exclude_profiles = false): array
     {
         $doc_metadata_key = $this->config['document_metadata_key'];
         $pj_doc_metadata_key = $this->config['pj_document_metadata_key'];
@@ -373,6 +432,11 @@ class Plugin extends MapasCulturaisPlugin
         if ($emails = $this->config['skip_user_emails']) {
             $emails = "'" . implode("','", $emails) . "'";
             $skip_user_emails = "AND u.email NOT IN ($emails)";
+        }
+
+        $exclude_profiles_sql = '';
+        if($exclude_profiles) {
+            $exclude_profiles_sql = "AND a.id <> u.profile_id";
         }
 
         $sql = "SELECT 
@@ -388,11 +452,13 @@ class Plugin extends MapasCulturaisPlugin
                     unaccent(lower(nomeCompleto.value)) AS agent_nome_completo,
                     doc.value AS agent_doc,
                     pj_doc.value AS pj_doc,
+                    emailPublico.value AS agent_email_publico,
                     emailPrivado.value AS agent_email_privado,
                     array_to_json(array_agg(row_to_json(terms))) AS terms
                 FROM agent a 
                     JOIN usr u ON u.id = a.user_id
                     LEFT JOIN agent_meta nomeCompleto ON nomeCompleto.object_id = a.id AND nomeCompleto.key = 'nomeCompleto'
+                    LEFT JOIN agent_meta emailPublico ON emailPublico.object_id = a.id AND emailPublico.key = 'emailPublico'
                     LEFT JOIN agent_meta emailPrivado ON emailPrivado.object_id = a.id AND emailPrivado.key = 'emailPrivado'
                     LEFT JOIN agent_meta doc ON doc.object_id = a.id AND doc.key = '$doc_metadata_key'
                     LEFT JOIN agent_meta pj_doc ON pj_doc.object_id = a.id AND pj_doc.key = '$pj_doc_metadata_key'
@@ -402,6 +468,7 @@ class Plugin extends MapasCulturaisPlugin
                     a.type = 1 AND
                     a.status = 1 
                     $skip_user_emails
+                    $exclude_profiles_sql
                 GROUP BY 
                     u.id,
                     user_create_timestamp,
@@ -415,9 +482,10 @@ class Plugin extends MapasCulturaisPlugin
                     agent_nome_completo,
                     agent_doc,
                     pj_doc,
+                    agent_email_publico,
                     agent_email_privado
                 ORDER BY a.id ASC
-                LIMIT 1000
+                -- LIMIT 5000
                 ";
         $agents = $this->conn->fetchAll($sql);
 
@@ -438,16 +506,31 @@ class Plugin extends MapasCulturaisPlugin
     {
         $app = App::i();
 
+        $cache_key = 'similarAgentes.serialized';
+
+        @mkdir(PRIVATE_FILES_PATH . __NAMESPACE__ . '/');
+
+        $cache_filename = PRIVATE_FILES_PATH . __NAMESPACE__ . '/' . $cache_key;
+        
+        if(file_exists($cache_filename)) {
+            $result = unserialize(trim(file_get_contents($cache_filename)));
+            return $result;
+        }
+
         /** @var object[] */
         $similarities = [];
 
         /** @var object[] */
         $similarities_by_agent_id = [];
 
+        $total_comparisons = count($agents) * (count($agents) - 1) / 2;
+        $percentage = 0;
+        $number_of_comparisons = 0;
+
         for ($i1 = 0; $i1 < count($agents); $i1++) {
             $agent1 = $agents[$i1];
 
-            $app->log->debug("#{$i1} - Comparando agente {$agent1->agent_id} ({$agent1->agent_name})");
+            $app->log->debug("#{$i1} ({$percentage}%) - Comparando agente {$agent1->agent_id} ({$agent1->agent_name})");
 
             for ($i2 = $i1; $i2 < count($agents); $i2++) {
                 $agent2 = $agents[$i2];
@@ -456,6 +539,10 @@ class Plugin extends MapasCulturaisPlugin
                 if ($i2 <= $i1) {
                     continue;
                 }
+
+                $number_of_comparisons++;
+
+                $percentage = number_format( $number_of_comparisons / $total_comparisons * 100, 4);
 
 
                 if ($sim = $this->getAgentSimilarities($agent1, $agent2)) {
@@ -473,6 +560,8 @@ class Plugin extends MapasCulturaisPlugin
                 }
             }
         }
+
+        file_put_contents($cache_filename, serialize($similarities));
 
         return $similarities;
     }
@@ -578,24 +667,14 @@ class Plugin extends MapasCulturaisPlugin
 
         $registered_metadata = $app->getRegisteredMetadata(Agent::class);
 
-        // mescla as informações mais recentes baseadas nas revisões.
-        // por conta da ordenação pelo timestamp do dado, no fim do loop o $agent_data
-        // terá a versão mais recente dos dados preenchidos
-        foreach ($revision_data as $data) {
+        foreach ($revision_data as $key => &$data) {
             $data = (object) $data;
-
             if(in_array($data->key, ['_spaces', 'parent', '_subsiteId', '_type'])) {
+                unset($revision_data[$key]);
                 continue;
             }
 
             $data->value = json_decode($data->value);
-
-            if($unserializer = $registered_metadata[$data->key]->unserialize) {
-                $data->value = $unserializer($data->value, );
-            }
-
-            $agents_data[$data->object_id] = &$agents_data[$data->object_id] ?? [];
-            $agent_data = &$agents_data[$data->object_id];
 
             if (in_array($data->key, ['createTimestamp', 'updateTimestamp'])) {
                 $data->value = new \DateTime($data->value->date);
@@ -621,10 +700,23 @@ class Plugin extends MapasCulturaisPlugin
                 }
             }
 
+            $agents_data[$data->object_id] = &$agents_data[$data->object_id] ?? [];
+        }
+
+        // mescla as informações mais recentes baseadas nas revisões.
+        // por conta da ordenação pelo timestamp do dado, no fim do loop o $agent_data
+        // terá a versão mais recente dos dados preenchidos
+        foreach ($revision_data as &$data) {
+            $agent_data = &$agents_data[$data->object_id];
+            
+            if($unserializer = $registered_metadata[$data->key]->unserialize ?? false) {
+                $data->value = $unserializer($data->value, (object) $agent_data);
+            }
+            if($key == 'pssoa')
             $agent_data[$data->key] = $data->value;
         }
 
-        eval(\psy\sh());die;
+
         /*
         Objetivo: manter um agente individual para cada CPF.
         - Se um ou mais dos agentes for o agente de perfil do usuário e o(s) outro(s) agentes não, 
@@ -637,67 +729,87 @@ class Plugin extends MapasCulturaisPlugin
         */
 
         $profile_agents = [];
-        foreach ($agents as $agent) {
-            if ($agent->user_profile_id == $agent->agent_id) {
-                $profile_agents[] = $agent;
+        foreach ($agents as $agent_to_preserve) {
+            if ($agent_to_preserve->user_profile_id == $agent_to_preserve->agent_id) {
+                $profile_agents[] = $agent_to_preserve;
             }
         }
   
-        $target_agent = null;
+        $preserve_agent = null;
 
         if ($profile_agents) {
             // se há agentes perfis de usuário, escolhe o aquele que tenha o usuário que fez login há menos tempo
             usort($profile_agents, fn($agent1, $agent2) => $agent2->user_last_login_timestamp <=> $agent1->user_last_login_timestamp);
-            $target_agent = $profile_agents[0];
+            $preserve_agent = $profile_agents[0];
         } else {
             // se não há perfis de usuário, escolhe o agente que tenha sido atualizado há menos tempo
             usort($agents, fn($agent1, $agent2) => $agent2->agent_update_timestamps <=> $agent1->agent_update_timestamps);
-            $target_agent = $agents[0];
+            $preserve_agent = $agents[0];
         }
 
-        $agent = $app->repo('Agent')->find($target_agent->agent_id);
+        $agent_to_preserve = $app->repo('Agent')->find($preserve_agent->agent_id);
+
+        if(is_null($agent_to_preserve)) {
+            return;
+        }
 
         foreach($merged_data as $key => $value) {
-            $agent->$key = $value;
+            $agent_to_preserve->$key = $value;
         }
 
-        $agent->save(true);
+        $agent_to_preserve->save(true);
 
-        $agents_to_delete = array_filter($agents, fn($ag) => $ag->agent_id != $target_agent->agent_id);
+        $agents_to_delete = array_filter($agents, fn($ag) => $ag->agent_id != $agent_to_preserve->id);
+
+
+        $users_with_deleted_agents = [];
 
         // transfere todas as entidades "assinadas" pelos agentes que serão excluídos para o agente de destino
         foreach($agents_to_delete as $agent_to_delete) {
-            $this->transferSubagents($agent_to_delete, $agent);
-            $this->transferSpaces($agent_to_delete, $agent);
-            $this->transferProjects($agent_to_delete, $agent);
-            $this->transferOpportunities($agent_to_delete, $agent);
-            $this->transferEvents($agent_to_delete, $agent);
-            $this->transferRegistrations($agent_to_delete, $agent);
+            $this->log(self::ACTION_MERGE_AGENTS, ['to_delete' => $agent_to_delete, 'to_preserve' => $agent_to_preserve]);
 
-            $this->mergeMetaLists($agent_to_delete, $agent);
-            $this->mergeFiles($agent_to_delete, $agent);
+            $this->transferSubagents($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferSpaces($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferProjects($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferOpportunities($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferEvents($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferRegistrations($agent_to_delete->agent_id, $agent_to_preserve);
+            
+            $this->mergeMetaLists($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->mergeFiles($agent_to_delete->agent_id, $agent_to_preserve);
+
             $this->conn->executeQuery("DELETE FROM agent WHERE id = $agent_to_delete->agent_id");
+
+            $users_with_deleted_agents[$agent_to_delete->user_id] = (object) [
+                'user_id' => $agent_to_delete->user_id,
+                'user_email' => $agent_to_delete->user_email
+            ];
         }
 
-        // iterar no $users verificando se o usuário está vazio e apagando
-        // o usuário pode estar vazio se não havia outro 
+        // iterar no $users_with_deleted_agents verificando se o usuário está vazio e apagando
+        // o usuário pode estar vazio se não havia outro agente nele
 
-        eval(\psy\sh());
-        die;
+        foreach($users_with_deleted_agents as $user_id => $user) {
+            $user_has_agents = $this->conn->fetchScalar("SELECT count(*) FROM agent WHERE user_id = {$user_id}");
+            if(!$user_has_agents) {
+                $this->log(self::ACTION_DELETE_EMPTY_USER, $user);
+                $this->conn->executeQuery("DELETE FROM usr WHERE id = {$user_id}");
+            }
+        }
     }
 
-    public function transferAgentRelations($from_agent, $to_agent) {
+    public function transferAgentRelations(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery('
             UPDATE agent_relation 
             SET agent_id = :to 
             WHERE agent_id = :from', 
-            ['from' => $from_agent->agent_id, 'to' => $to_agent->id]);
+            ['from' => $from_agent_id, 'to' => $to_agent->id]);
 
         $this->conn->executeQuery("
             UPDATE agent_relation 
             SET object_id = :to 
             WHERE object_type = 'MapasCulturais\Entities\Agent' AND object_id = :from", 
-            ['from' => $from_agent->agent_id, 'to' => $to_agent->id]);
+            ['from' => $from_agent_id, 'to' => $to_agent->id]);
 
         // remove diplicidades da tabela 
         $this->conn->executeQuery("
@@ -714,7 +826,7 @@ class Plugin extends MapasCulturaisPlugin
             
     }
 
-    public function transferSubagents($from_agent, $to_agent) {
+    public function transferSubagents(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery('
             UPDATE agent 
             SET 
@@ -722,41 +834,41 @@ class Plugin extends MapasCulturaisPlugin
                 user_id = :user
             WHERE parent_id = :from', 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id,
                 'user' => $to_agent->user->id
             ]);
     }
 
-    public function transferSpaces($from_agent, $to_agent) {
+    public function transferSpaces(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE space 
             SET agent_id = :to
             WHERE agent_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
     }
 
-    public function transferProjects($from_agent, $to_agent) {
+    public function transferProjects(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE project 
             SET agent_id = :to
             WHERE agent_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
     }
 
-    public function transferOpportunities($from_agent, $to_agent) {
+    public function transferOpportunities(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE opportunity 
             SET agent_id = :to
             WHERE agent_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
 
@@ -767,34 +879,35 @@ class Plugin extends MapasCulturaisPlugin
                 object_type = 'MapasCulturais\Entities\Agent' AND
                 object_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
     }
 
-    public function transferEvents($from_agent, $to_agent) {
+    public function transferEvents(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE event 
             SET agent_id = :to
             WHERE agent_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
     }
 
-    public function transferRegistrations($from_agent, $to_agent) {
+    public function transferRegistrations(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE registration 
             SET agent_id = :to
             WHERE agent_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
     }
 
     public function transferEvaluations($from_user, $to_user) {
+        /** @todo corrigir */
         $this->conn->executeQuery("
             UPDATE registration_evaluation 
             SET user_id = :to
@@ -805,7 +918,7 @@ class Plugin extends MapasCulturaisPlugin
             ]);
     }
 
-    public function mergeMetaLists($from_agent, $to_agent) {
+    public function mergeMetaLists(int $from_agent_id, $to_agent) {
         $this->conn->executeQuery("
             UPDATE metalist 
             SET object_id = :to
@@ -813,7 +926,7 @@ class Plugin extends MapasCulturaisPlugin
                 object_type = 'MapasCulturais\Entities\Agent' AND
                 object_id = :from", 
             [
-                'from' => $from_agent->agent_id, 
+                'from' => $from_agent_id, 
                 'to' => $to_agent->id
             ]);
 
@@ -831,14 +944,14 @@ class Plugin extends MapasCulturaisPlugin
 
     }
 
-    public function mergeFiles($from_agent, $to_agent) {
+    public function mergeFiles(int $from_agent_id, $to_agent) {
         // obtém lista de arquivos da entidade de origem
         $from_files = $this->conn->fetchAll("
             SELECT * 
             FROM file 
             WHERE object_type = 'MapasCulturais\Entities\Agent' AND
                   object_id = :from",
-                ['from' => $from_agent->agent_id]);
+                ['from' => $from_agent_id]);
 
         // obtém listas de arquivos do destino
         $to_files = $this->conn->fetchAll("
@@ -898,25 +1011,147 @@ class Plugin extends MapasCulturaisPlugin
                 $public_files_path . $file->path;
             
             
-            unlink($path);
+            @unlink($path);
             $this->conn->executeQuery("DELETE FROM file WHERE id = $file->id");
         }
 
         // move os arquivos que precisam ser movidos
         foreach($move_files as $file) {
-            $old_path = $file->private ? 
+            $old_filename = $file->private ? 
                 PRIVATE_FILES_PATH . $file->path :
                 $public_files_path . $file->path;
 
-            $new_path = str_replace("agent/{$from_agent->agent_id}/", "agent/{$to_agent->id}/", $old_path);
+            $new_filename = str_replace("agent/{$from_agent_id}/", "agent/{$to_agent->id}/", $old_filename);
 
-            $pathinfo = pathinfo ($new_path);
+            $pathinfo = pathinfo ($new_filename);
 
             @mkdir($pathinfo['dirname'], recursive:true);
 
-            rename($old_path, $new_path);
+            @rename($old_filename, $new_filename);
 
-            $this->conn->executeQuery("UPDATE file SET object_id = {$to_agent->id} WHERE id = $file->id");
+            $new_path = str_replace("agent/{$from_agent_id}/", "agent/{$to_agent->id}/", $file->path);
+
+            $this->conn->executeQuery("UPDATE file SET object_id = :agent_id, path=:new_path WHERE id = :file_id",[
+                'agent_id' => $to_agent->id,
+                'new_path' => $new_path,
+                'file_id' => $file->id
+            ]);
         }
     }
+
+    function fixSubagents(){
+        $app = App::i();
+        $agents = $this->fetchAgents(exclude_profiles: true);
+        $total = count($agents);
+        $num = 0;
+        foreach($agents as $agent) {
+            $app->em->clear();
+
+            $agent->total = $total;
+            $agent->num = ++$num;
+            $agent->percentage = number_format($num/$total*100,1,',') . '%';
+
+            $this->log(self::ACTION_FIX_SUBAGENT, $agent);
+            // verifica se tem cpf
+            $has_document = $this->agentHasDoc($agent);
+
+            // verifica que tenha algum email
+            $has_email = $this->agentHasEmail($agent);
+
+            // verifica que não tenha 
+            $has_entities = $this->agentHasEntities($agent->agent_id);
+
+            if($has_document || $has_email) {
+                // cria usuário e transfere o agente
+                $app->disableAccessControl();
+                $user = new User;
+                $user->email = $agent->agent_email_privado ?: $agent->agent_email_publico ?: "{$agent->agent_doc}@mapas";
+                $user->authProvider = '';
+                $user->authUid = $user->email;
+                $user->status = 1;
+                $user->save(true);
+
+                /** @var Agent */
+                $agent = $app->repo('Agent')->find($agent->agent_id);
+
+                $agent->user = $user;
+                $agent->save(true);
+                $agent->setAsUserProfile();
+                $agent->save(true);
+
+                $app->enqueueEntityToPCacheRecreation($agent);
+                $app->enableAccessControl();
+
+                $this->log(self::ACTION_SUBAGENT_NEW_USER, $user);
+                continue;
+            }
+
+            if($has_entities) {
+                $this->log(self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT, $agent);
+
+                $user_profile = $app->repo('Agent')->find($agent->user_profile_id);
+
+                // transfere as entidades para o agente principal do usuário
+                $this->transferSubagents($agent->agent_id, $user_profile);
+                $this->transferSpaces($agent->agent_id, $user_profile);
+                $this->transferProjects($agent->agent_id, $user_profile);
+                $this->transferOpportunities($agent->agent_id, $user_profile);
+                $this->transferEvents($agent->agent_id, $user_profile);
+                $this->transferRegistrations($agent->agent_id, $user_profile);
+            }
+
+            // remove agentes que não tenham cpf nem email
+            $this->log(self::ACTION_DELETE_EMPTY_SUBAGENT, $agent);
+            $this->conn->executeQuery("DELETE FROM agent WHERE id = {$agent->agent_id}");            
+        }
+    }
+
+    function agentHasDoc($agent): bool {
+        return (bool) $agent->agent_doc;
+    }
+
+    function agentHasEmail($agent): bool {
+        return $agent->agent_email_publico || $agent->agent_email_privado;
+    }
+
+    function agentHasEntities(int $agent_id): bool {
+        return  $this->agentHasSubagentes($agent_id) ||
+                $this->agentHasSpaces($agent_id) ||
+                $this->agentHasEvents($agent_id) ||
+                $this->agentHasProjects($agent_id) ||
+                $this->agentHasOpportunities($agent_id) ||
+                $this->agentHasRegistrations($agent_id);
+
+    }
+
+    function agentHasSubagentes(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM agent WHERE parent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
+    function agentHasSpaces(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM space WHERE agent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
+    function agentHasEvents(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM event WHERE agent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
+    function agentHasProjects(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM project WHERE agent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
+    function agentHasOpportunities(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM opportunity WHERE agent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
+    function agentHasRegistrations(int $agent_id): bool {
+        $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM registration WHERE agent_id = {$agent_id}");
+        return (bool) $num;
+    }
+
 }
