@@ -6,25 +6,29 @@ use MapasCulturais\App;
 use MapasCulturais\Controller as MapasCulturaisController;
 use MapasCulturais\Exceptions\PermissionDenied;
 
-class Controller extends MapasCulturaisController {
+class Controller extends MapasCulturaisController
+{
     static Plugin $plugin;
 
-    function __construct() {
+    function __construct()
+    {
         ini_set('max_execution_time', 0);
-        ini_set('memory_limit', '4G'); 
+        ini_set('memory_limit', '4G');
     }
 
-    function checkPermissions() {
+    function checkPermissions()
+    {
         $this->requireAuthentication();
 
         $app = App::i();
 
-        if(!$app->user->is('saasAdmin')) {
-            throw new PermissionDenied($app->user, action:'fix agents');
+        if (!$app->user->is('saasAdmin')) {
+            throw new PermissionDenied($app->user, action: 'fix agents');
         }
     }
 
-    function GET_convertToCollective() {
+    function GET_convertToCollective()
+    {
         $this->checkPermissions();
 
         $agents = self::$plugin->analyzePersonNames();
@@ -32,47 +36,51 @@ class Controller extends MapasCulturaisController {
         $this->render('convert-to-collective', ['agents' => $agents]);
     }
 
-    function POST_convertToCollective() {
+    function POST_convertToCollective()
+    {
         $this->checkPermissions();
         $agent_ids = $this->data['agentIds'];
         self::$plugin->convertToCollective($agent_ids);
     }
 
-    function GET_fixUserProfiles() {
+    function GET_fixUserProfiles()
+    {
         $this->checkPermissions();
 
         $app = App::i();
         $app->disableAccessControl();
-        
+
         self::$plugin->fixUserProfiles();
     }
 
-    function ALL_calculateAgentSimilarities() {
+    function ALL_calculateAgentSimilarities()
+    {
         $this->checkPermissions();
-        
+
         $agents = self::$plugin->fetchAgents();
         $similarities = self::$plugin->groupSimilarAgents($agents);
     }
-    
-    function GET_mergeDuplicatedAgents() {
+
+    function GET_mergeDuplicatedAgents()
+    {
         $this->checkPermissions();
-        
+
         $app = App::i();
-        
+
         $agents = self::$plugin->fetchAgents();
         $similarities = self::$plugin->groupSimilarAgents($agents);
 
         echo '<pre>';
-        echo json_encode($similarities,JSON_PRETTY_PRINT);
+        echo json_encode($similarities, JSON_PRETTY_PRINT);
 
         $total = count($similarities);
         $count = 0;
 
-        foreach($similarities as $agents_similarities) {
+        foreach ($similarities as $agents_similarities) {
             $count++;
             $agents_similarities->total = $total;
             $agents_similarities->count = $count;
-            $agents_similarities->percentage = number_format($count/$total*100,1,',') . '%';
+            $agents_similarities->percentage = number_format($count / $total * 100, 1, ',') . '%';
             self::$plugin->log(self::$plugin::ACTION_MERGE_DUPLICATED_AGENTS, $agents_similarities);
             self::$plugin->mergeAgents($agents_similarities->agents);
 
@@ -80,12 +88,11 @@ class Controller extends MapasCulturaisController {
         }
     }
 
-    function GET_fixSubagents() {
+    function GET_fixSubagents()
+    {
         $this->checkPermissions();
 
         $app = App::i();
-        $app->disableAccessControl();
         self::$plugin->fixSubagents();
-        $app->enableAccessControl();
     }
 }
