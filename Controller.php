@@ -70,9 +70,6 @@ class Controller extends MapasCulturaisController
         $agents = self::$plugin->fetchAgents();
         $similarities = self::$plugin->groupSimilarAgents($agents);
 
-        echo '<pre>';
-        echo json_encode($similarities, JSON_PRETTY_PRINT);
-
         $total = count($similarities);
         $count = 0;
 

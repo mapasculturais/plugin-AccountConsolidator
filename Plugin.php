@@ -72,52 +72,105 @@ class Plugin extends MapasCulturaisPlugin
     const ACTION_SUBAGENT_NEW_USER = 'subagent new user';
     const ACTION_FIX_SUBAGENT = 'fix subagent';
     const ACTION_TRANSFER_ENTITIES_OF_SUBAGENT = 'transfer subagent entities';
+    const ACTION_FIX_USER_PROFILE = 'corrige agente de perfil';
+    const ACTION_FIX_USER_PROFILE__CASE = 'corrige agente de perfil - casos';
+    const ACTION_FIX_USER_PROFILE__TYPE = 'corrige agente de perfil - corrige tipo';
+    const ACTION_FIX_USER_PROFILE__NEW = 'corrige agente de perfil - novo agente';
+    const ACTION_FIX_USER_PROFILE__SET_AS_PROFILE = 'corrige agente de perfil - define como perfil';
 
-    function log($action_type, $data)
+    function logLine(string $action_type, string $line)
     {
         $app = App::i();
-        switch ($action_type) {
-            case self::ACTION_MERGE_AGENTS:
-                $to_delete = $data['to_delete'];
-                $to_preserve = $data['to_preserve'];
 
-                $app->log->debug("AGENTE #{$to_delete->agent_id} ({$to_delete->agent_name}) MESCLADO COM #{$to_preserve->id} ({$to_preserve->name})");
+        $dirname = VAR_PATH . 'logs/' . __NAMESPACE__ . '/';
+        @mkdir($dirname);
+
+        $filename = $app->slugify($action_type) . '.log';
+
+        file_put_contents($dirname . $filename, "{$line}\n", FILE_APPEND);
+        $app->log->debug($line);
+    }
+
+    function log(string $action_type, $data)
+    {
+        switch ($action_type) {
+            case self::ACTION_CONVERT_AGENT_TO_COLLECTIVE:
+                $data= (object) $data;
+                $this->logLine($action_type, "CONVERTE PARA COLETIVO: #{$data->id} {$data->name} [{$data->nome_completo}] | cpf: {$data->cpf} | cnpj: {$data->cnpj}");
                 break;
 
-            case self::ACTION_DELETE_EMPTY_USER:
-                $app->log->debug("USUÁRIO VAZIO REMOVIDO #{$data->user_id} - {$data->user_email}");
+            case self::ACTION_FIX_USER_PROFILE__CASE:
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "\n");
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "\n");
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "=================================");
+                if(empty($data->count)) {
+                    $this->logLine(self::ACTION_FIX_USER_PROFILE, "$data->case - $data->description");
+                } else {
+                    $this->logLine(self::ACTION_FIX_USER_PROFILE, "$data->case - $data->description ({$data->count} usuários)");
+                }
+                break;
+
+            case self::ACTION_FIX_USER_PROFILE:
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "\n");
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "------------");
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "corrige perfil do usuário: #{$data->id} {$data->email}");
+
+                break;
+
+            case self::ACTION_FIX_USER_PROFILE__TYPE:
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "-> define como individual: #{$data->id} {$data->name} [{$data->nomeCompleto}] | cpf: {$data->cpf} | cnpj: {$data->cnpj}");
+                break;
+            
+            case self::ACTION_FIX_USER_PROFILE__NEW:
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "-> cria novo agente: #{$data->id} {$data->name} [{$data->nomeCompleto}] | cpf: {$data->cpf} | cnpj: {$data->cnpj}");
+                break;
+            
+            case self::ACTION_FIX_USER_PROFILE__SET_AS_PROFILE:
+                $this->logLine(self::ACTION_FIX_USER_PROFILE, "-> define como perfil");
                 break;
 
             case self::ACTION_MERGE_DUPLICATED_AGENTS:
                 $agent_ids = implode(',', array_keys($data->agents));
 
-                $app->log->debug("-------------------------------------- $data->count / $data->total ($data->percentage)");
-                $app->log->debug("SIMILARIDADES ENTRE AGENTES $agent_ids");
+                $this->logLine($action_type, "-------------------------------------- $data->count / $data->total ($data->percentage)");
+                $this->logLine($action_type, "SIMILARIDADES ENTRE AGENTES $agent_ids");
 
                 foreach ($data->similarities as $ids => $similarities) {
                     foreach ($similarities as $fields => $values) {
                         $percentage = number_format($values[0], 1) . '%';
                         $string = "---> $ids ($fields) $percentage [{$values[1]} <=> {$values[2]}]";
 
-                        $app->log->debug($string);
+                        $this->logLine($action_type, $string);
                     }
                 }
                 break;
+
+            case self::ACTION_MERGE_AGENTS:
+                $to_delete = $data['to_delete'];
+                $to_preserve = $data['to_preserve'];
+
+                $this->logLine($action_type, "AGENTE #{$to_delete->agent_id} ({$to_delete->agent_name}) MESCLADO COM #{$to_preserve->id} ({$to_preserve->name})");
+                break;
+
+            case self::ACTION_DELETE_EMPTY_USER:
+                $this->logLine($action_type, "USUÁRIO VAZIO REMOVIDO #{$data->user_id} - {$data->user_email}");
+                break;
+
             case self::ACTION_FIX_SUBAGENT:
-                $app->log->debug("----------------------------------------- $data->num / $data->total ($data->percentage)");
-                $app->log->debug("CORRIGINDO SUBAGENTE #{$data->agent_id} ($data->agent_name)");
+                $this->logLine($action_type, "----------------------------------------- $data->num / $data->total ($data->percentage)");
+                $this->logLine($action_type, "CORRIGINDO SUBAGENTE #{$data->agent_id} ($data->agent_name)");
                 break;
 
             case self::ACTION_SUBAGENT_NEW_USER:
-                $app->log->debug("-> novo usuário #$data->id ($data->email)");
+                $this->logLine($action_type, "-> novo usuário #$data->id ($data->email)");
                 break;
 
             case self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT:
-                $app->log->debug("-> transferindo entidades");
+                $this->logLine($action_type, "-> transferindo entidades");
                 break;
 
             case self::ACTION_DELETE_EMPTY_SUBAGENT:
-                $app->log->debug("-> removido subagente");
+                $this->logLine($action_type, "-> removido subagente");
                 break;
         }
     }
@@ -180,8 +233,36 @@ class Plugin extends MapasCulturaisPlugin
     function convertToCollective(array $agent_ids)
     {
         $agent_ids = array_map(fn($id) => (int) $id, $agent_ids);
+        $agent_ids = array_unique($agent_ids);
         $ids = implode(',', $agent_ids);
-        $this->conn->executeQuery("UPDATE agent SET type = 2 WHERE id in ($ids)");
+
+        $agents = $this->conn->fetchAll("SELECT 
+                                                a.user_id, u.email as user_email, u.profile_id, 
+                                                a.id, a.parent_id, unaccent(lower(a.name)) as name, a.type, 
+                                                unaccent(lower(_nomeCompleto.value)) as nome_completo, 
+                                                emailPublico.value as email_publico, 
+                                                emailPrivado.value as email_privado, 
+                                                _cpf.value as cpf, 
+                                                _cnpj.value as cnpj 
+                                            FROM agent a 
+                                                LEFT JOIN agent_meta _nomeCompleto ON _nomeCompleto.object_id = a.id AND _nomeCompleto.key = 'nomeCompleto'
+                                                LEFT JOIN agent_meta emailPrivado ON emailPrivado.object_id = a.id AND emailPrivado.key = 'emailPrivado'
+                                                LEFT JOIN agent_meta emailPublico ON emailPublico.object_id = a.id AND emailPublico.key = 'emailPublico'
+                                                LEFT JOIN agent_meta _cpf ON _cpf.object_id = a.id AND _cpf.key = 'cpf'
+                                                LEFT JOIN agent_meta _cnpj ON _cnpj.object_id = a.id AND _cnpj.key = 'cnpj'
+                                                JOIN usr u ON u.id = a.user_id 
+                                            WHERE a.user_id IN (
+                                                SELECT distinct(u.id) 
+                                                FROM usr u 
+                                                WHERE 
+                                                    a.id in ({$ids})
+                                            )
+                                            ORDER BY a.id ASC");
+
+        foreach ($agents as $agent) {
+            $this->log(self::ACTION_CONVERT_AGENT_TO_COLLECTIVE, $agent);
+            $this->conn->executeQuery("UPDATE agent SET type = 2 WHERE id = :id", ['id' => $agent['id']]);
+        }
     }
 
     /** Faz com que todos os usuários tenham um agente individual como agente principal (profile) */
@@ -259,6 +340,20 @@ class Plugin extends MapasCulturaisPlugin
             '4.' => [],
         ];
 
+        $case_descriptions = [
+            '1.' => 'Se o usuário tem apenas 1 agente individual, coloca esse agente como agente de perfil',
+            '2.' => 'Se o usuário tem mais do que 1 agente individual procura o agente seguinto a ordem:',
+            '2.1.' => 'Email igual ao do usuário e que tenha o cpf preenchido', 
+            '2.2.' => 'CPF preenchido',
+            '2.3.' => 'Email igual ao do usuário',
+            '2.4.' => 'Primeiro da lista',
+            '3.' => 'Se o usuário não possui nenhum agente individual:',
+            '3.1.' => 'Escolhe um agente coletivo que tenha CPF preenchido, não tenha CNPJ preenchido e tenha o email igual ao do usuário',
+            '3.2.' => 'Escolhe um agente coletivo que tenha CPF preenchido, não tenha CNPJ preenchido',
+            '3.3.' => 'Escolhe um agente sem cpf nem cnpj',
+            '4.' => 'Não foi encontrado nenhum agente para ser o agente principal, cria um novo agente',
+        ];
+
         // definiçào de qual será o agente de perfil
         foreach ($user_agents as $user_id => &$user) {
             // 1. se o usuário tem apenas 1 agente individual, coloca esse agente como agente de perfil
@@ -268,11 +363,11 @@ class Plugin extends MapasCulturaisPlugin
                 continue;
             }
 
-            // 2. se o usuário tem mais do que 1 agente individual procura o agente seguinto essa ordem: 
-            // 2.1. procura o agente que tem o email igual ao do usuário e que tenha o cpf preenchido
-            // 2.2. que tenha CPF preenchido
-            // 2.3. procura o agente que tem o email igual ao do usuário
-            // 2.4. pega o primeiro da lista
+            // 2. Se o usuário tem mais do que 1 agente individual procura o agente seguinto a ordem:
+            // 2.1. Email igual ao do usuário e que tenha o cpf preenchido
+            // 2.2. CPF preenchido
+            // 2.3. Email igual ao do usuário
+            // 2.4. Primeiro da lista
             if (count($user->individual) > 1) {
                 // 2.1. procura o agente que tem o email igual ao do usuário e que tenha o cpf preenchido
                 foreach ($user->individual as $agent) {
@@ -358,7 +453,7 @@ class Plugin extends MapasCulturaisPlugin
 
             if ($user->new_profile_agente) continue;
 
-            // 4. não foi encontrado nenhum agente para ser o agente principal
+            // 4. não foi encontrado nenhum agente para ser o agente principal.
             // se o $user->new_profile_agente permanecer null é porque não foi encontrado nenhum agente para ser o agente de perfil, 
             // no loop de definição dos agentes de perfil, se o $user->new_profile_agente for null, será criado um agente vazio como rascunho
 
@@ -370,12 +465,10 @@ class Plugin extends MapasCulturaisPlugin
         foreach ($cases as $num => $users) {
             $cases_count[$num] = count($users);
         }
-        echo '<pre>';
-        // print_r($cases);
 
-        foreach ($cases as $case => $users) {
-            $c = count($users);
-            echo "<h1> $case ($c)</h1>";
+        foreach ($case_descriptions as $case => $description) {
+            $users = $cases[$case] ?? [];
+            $this->log(self::ACTION_FIX_USER_PROFILE__CASE, (object) ['case' => $case, 'description' => $description, 'count' => count($users)]);
             foreach ($users as $user) {
                 $this->fixUserProfile($user);
             }
@@ -385,36 +478,32 @@ class Plugin extends MapasCulturaisPlugin
     public function fixUserProfile(object $user_def)
     {
         $app = App::i();
-        if ($user_def->new_profile_agente) {
-            $app->log->debug('FIX USER PROFILE: ' . "{$user_def->user_id};{$user_def->new_profile_agente->id};{$user_def->new_profile_agente->name}");
-        } else {
-            $app->log->debug('FIX USER PROFILE: ' . "{$user_def->user_id};NEW AGENT;NEW AGENT");
-        }
 
         $conn = $this->conn;
         $conn->beginTransaction();
 
         /** @var User */
         $user = $app->repo('User')->find($user_def->user_id);
+        $this->log(self::ACTION_FIX_USER_PROFILE, $user);
 
-        if (!$user_def->new_profile_agente) {
-            echo "NOVO" . PHP_EOL;
-            $app->log->debug('criando novo agente individual para ser o profile do user ' . $user->user_id);
-            $new_profile_agent = new Agent($user);
-            $new_profile_agent->name = "";
-            $new_profile_agent->type = 1;
-            $new_profile_agent->status = Agent::STATUS_DRAFT;
-
-            $new_profile_agent->save(true);
-        } else {
+        if ($user_def->new_profile_agente) {
             $new_profile_agent = $app->repo('Agent')->find($user_def->new_profile_agente->id);
             $new_profile_agent->type = 1;
             $new_profile_agent->save(true);
+            $this->log(self::ACTION_FIX_USER_PROFILE__TYPE, $new_profile_agent);
+        } else {
+            $new_profile_agent = new Agent($user);
+            $new_profile_agent->type = 1;
+            $new_profile_agent->name = "";
+            $new_profile_agent->status = Agent::STATUS_DRAFT;
+            $new_profile_agent->save(true);
+            $user_def->new_profile_agente = $new_profile_agent;
+            $this->log(self::ACTION_FIX_USER_PROFILE__NEW, $new_profile_agent);
         }
 
+        $this->log(self::ACTION_FIX_USER_PROFILE__SET_AS_PROFILE, $new_profile_agent);
         $new_profile_agent->setAsUserProfile();
 
-        echo "{$user_def->user_id};{$new_profile_agent->id};{$new_profile_agent->name}" . PHP_EOL;
         $conn->commit();
         $app->em->clear();
     }
