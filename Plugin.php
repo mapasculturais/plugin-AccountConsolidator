@@ -203,9 +203,9 @@ class Plugin extends MapasCulturaisPlugin
                 $this->logLine('summary', 'garante que todos os usuários tenhma agentes individuais como agentes de perfil');
                 $this->logLine('summary', '-----------------------------------------');
                 
-                foreach($data['description'] as $num => $description) {
-                    $count = $data['cases'][$num] ?? 0;
-                    $this->logLine('summary', "$num: $count \t $description");
+                foreach($data['descriptions'] as $num => $description) {
+                    $count = $data['count'][$num] ?? '';
+                    $this->logLine('summary', "$num\t $count\t $description");
                     
                 }
                 break;
@@ -226,8 +226,10 @@ class Plugin extends MapasCulturaisPlugin
                 $this->logLine('summary', 'CORREÇÃO DE SUBAGENTES INDIVIDUAIS');
                 $this->logLine('summary', 'garante que todos os usuários tenham somente um agente individual');
                 $this->logLine('summary', '-----------------------------------------');
-                $this->logLine('summary', 'Novos usuários criados: ' . $data['new']);
                 $this->logLine('summary', 'Subagentes removidos: ' . $data['deleted']);
+                $this->logLine('summary', 'Novos usuários criados: ' . $data['new']);
+                $this->logLine('summary', '  - com email: ' . $data['withEmail']);
+                $this->logLine('summary', '  - sem email: ' . ($data['new'] - $data['withEmail']));
                 break;
         }
     }
@@ -1266,6 +1268,7 @@ class Plugin extends MapasCulturaisPlugin
     {
         $summary = [
             'new' => 0,
+            'withEmail' => 0,
             'deleted' => 0
         ];
 
@@ -1291,7 +1294,10 @@ class Plugin extends MapasCulturaisPlugin
             $has_entities = $this->agentHasEntities($agent->agent_id);
 
             if ($has_document || $email) {
-                $email = $email ?: "{$agent->agent_doc}@mapas";
+                $summary['new']++;
+                if($email) $summary['withEmail']++;
+
+                $email = $email ?: preg_replace('#[^\d]#','',$agent->agent_doc).'@mapas';
                 $agent = $app->repo('Agent')->find($agent->agent_id);
                 
                 // cria usuário e transfere o agente
@@ -1314,13 +1320,11 @@ class Plugin extends MapasCulturaisPlugin
                 $app->enqueueEntityToPCacheRecreation($agent);
                 $app->enableAccessControl();
 
-                $this->createAdminRequest($agent, $old_user->profile);
-
                 $this->sendNewUserEmail($user, $old_user);
 
-                $this->log(self::ACTION_SUBAGENT_NEW_USER, $user);
+                $this->createAdminRequest($agent, $old_user->profile);
 
-                $summary['new']++;
+                $this->log(self::ACTION_SUBAGENT_NEW_USER, $user);
                 continue;
             }
 
@@ -1431,6 +1435,7 @@ class Plugin extends MapasCulturaisPlugin
         $agent_relation->owner = $agent;
         $agent_relation->status = AgentAgentRelation::STATUS_PENDING;
         $agent_relation->group = Agent::AGENT_RELATION_ADMIN_GROUP;
+        $agent_relation->hasControl = true;
         $agent_relation->save(true);
 
         $request = new RequestAgentRelation($admin->user);
@@ -1442,6 +1447,9 @@ class Plugin extends MapasCulturaisPlugin
 
     function sendNewUserEmail(User $user, User $old_user)
     {
+        if (str_ends_with($user->email, '@mapas')) {
+            return;
+        }
         $app = App::i();
 
         $email_params = [
@@ -1454,7 +1462,8 @@ class Plugin extends MapasCulturaisPlugin
 
         $app->createAndSendMailMessage([
             'body' => $body,
-            'to' => $user->email
+            'to' => $user->email,
+            'subject' => "[$app->siteName] Ative sua conta!"
         ]);
     }
 

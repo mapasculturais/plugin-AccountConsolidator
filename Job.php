@@ -12,14 +12,13 @@ class Job extends \MapasCulturais\Definitions\JobType
     protected function _generateId(array $data, string $start_string, string $interval_string, int $iterations) { }
 
     protected function _execute(EntitiesJob $job) { 
-        $app = App::i();
+        \Notifications\Module::$disableMailMessages = true;
 
         $plugin = Plugin::$instance;
 
         /** @var int[] */
         $agent_ids = $job->agent_ids;
 
-        // converte os agentes individuais com nomes de agente coletivos em agentes coletivos
         $plugin->convertToCollective($agent_ids);
 
         $plugin->fixUserProfiles();
