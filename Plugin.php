@@ -87,6 +87,11 @@ class Plugin extends MapasCulturaisPlugin
     const ACTION_FIX_USER_PROFILE__NEW = 'corrige agente de perfil - novo agente';
     const ACTION_FIX_USER_PROFILE__SET_AS_PROFILE = 'corrige agente de perfil - define como perfil';
 
+    const SUMMARY_CONVERT_TO_COLLECTIVE = 'resumo da conversão para coletivos';
+    const SUMMARY_FIX_SUBAGENTS = 'resumo da correção de subagentes';
+    const SUMMARY_MERGE_DUPLICATED_AGENTS = 'mescla agentes duplicados';
+    const SUMMARY_FIX_PROFILE = 'resumo da correção de agentes de perfil';
+
     function logLine(string $action_type, string $line)
     {
         $app = App::i();
@@ -171,7 +176,7 @@ class Plugin extends MapasCulturaisPlugin
                 break;
 
             case self::ACTION_SUBAGENT_NEW_USER:
-                $this->logLine($action_type, "-> novo usuário #$data->id ($data->email)");
+                $this->logLine($action_type, "-> novo usuário #$data->id ($data->email) - PERFIL: #{$data->profile->id} {$data->profile->name}");
                 break;
 
             case self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT:
@@ -180,6 +185,49 @@ class Plugin extends MapasCulturaisPlugin
 
             case self::ACTION_DELETE_EMPTY_SUBAGENT:
                 $this->logLine($action_type, "-> removido subagente");
+                break;
+
+            case self::SUMMARY_CONVERT_TO_COLLECTIVE:
+                $this->logLine('summary', '');
+                $this->logLine('summary', '=========================================');
+                $this->logLine('summary', 'CONVERSÃO PARA AGENTES COLETIVOS');
+                $this->logLine('summary', 'converte os agentes do tipo individual que pelo nome foram identificados como sendo coletivos, para o agentes coletivos');
+                $this->logLine('summary', '-----------------------------------------');
+                $this->logLine('summary', "$data agentes individuais convertidos para agentes coletivos");
+                break;
+
+            case self::SUMMARY_FIX_PROFILE:
+                $this->logLine('summary', '');
+                $this->logLine('summary', '=========================================');
+                $this->logLine('summary', 'CORREÇÃO DOS AGENTES DE PERFIL');
+                $this->logLine('summary', 'garante que todos os usuários tenhma agentes individuais como agentes de perfil');
+                $this->logLine('summary', '-----------------------------------------');
+                
+                foreach($data['description'] as $num => $description) {
+                    $count = $data['cases'][$num] ?? 0;
+                    $this->logLine('summary', "$num: $count \t $description");
+                    
+                }
+                break;
+            
+            case self::SUMMARY_MERGE_DUPLICATED_AGENTS:
+                $this->logLine('summary', '');
+                $this->logLine('summary', '=========================================');
+                $this->logLine('summary', 'MESCLAGEM DE AGENTES DUPLICADOS');
+                $this->logLine('summary', 'identifica agentes duplicados pelo documento, nome e email, mescla os dados e entidades de propriedade desses agentes e depois exclui os agentes vazios, mantendo apenas 1 agente');
+                $this->logLine('summary', '-----------------------------------------');
+                $this->logLine('summary', 'Número de agentes com duplicidades: ' . $data['similarities']);
+                $this->logLine('summary', 'Número de agentes removidos: ' . $data['deleted']);
+                break;
+
+            case self::SUMMARY_FIX_SUBAGENTS:
+                $this->logLine('summary', '');
+                $this->logLine('summary', '=========================================');
+                $this->logLine('summary', 'CORREÇÃO DE SUBAGENTES INDIVIDUAIS');
+                $this->logLine('summary', 'garante que todos os usuários tenham somente um agente individual');
+                $this->logLine('summary', '-----------------------------------------');
+                $this->logLine('summary', 'Novos usuários criados: ' . $data['new']);
+                $this->logLine('summary', 'Subagentes removidos: ' . $data['deleted']);
                 break;
         }
     }
@@ -278,6 +326,8 @@ class Plugin extends MapasCulturaisPlugin
             $this->log(self::ACTION_CONVERT_AGENT_TO_COLLECTIVE, $agent);
             $this->conn->executeQuery("UPDATE agent SET type = 2 WHERE id = :id", ['id' => $agent['id']]);
         }
+
+        $this->log(self::SUMMARY_CONVERT_TO_COLLECTIVE, count($agents));
     }
 
     /** Faz com que todos os usuários tenham um agente individual como agente principal (profile) */
@@ -488,6 +538,40 @@ class Plugin extends MapasCulturaisPlugin
                 $this->fixUserProfile($user);
             }
         }
+
+        $this->log(self::SUMMARY_FIX_PROFILE, ['count' => $cases_count, 'descriptions' => $case_descriptions]);
+    }
+
+    function mergeDuplicatedAgents()
+    {
+        $app = App::i();
+
+        $agents = $this->fetchAgents();
+        $similarities = $this->groupSimilarAgents($agents);
+
+        $total = count($similarities);
+        $count = 0;
+
+        $summary = [
+            'similarities' => $total,
+            'deleted' => 0
+        ];
+
+        foreach ($similarities as $agents_similarities) {
+            $count++;
+            $agents_similarities->total = $total;
+            $agents_similarities->count = $count;
+            $agents_similarities->percentage = number_format($count / $total * 100, 1, ',') . '%';
+            
+            $summary['deleted'] += count($agents_similarities->agents) - 1;
+
+            $this->mergeAgents($agents_similarities->agents);            
+            $this->log(self::ACTION_MERGE_DUPLICATED_AGENTS, $agents_similarities);
+            
+            $app->em->clear();
+        }
+
+        $this->log(self::SUMMARY_MERGE_DUPLICATED_AGENTS, $summary);
     }
 
     public function fixUserProfile(object $user_def)
@@ -1180,6 +1264,11 @@ class Plugin extends MapasCulturaisPlugin
 
     function fixSubagents()
     {
+        $summary = [
+            'new' => 0,
+            'deleted' => 0
+        ];
+
         $app = App::i();
         $agents = $this->fetchAgents(exclude_profiles: true);
         $total = count($agents);
@@ -1214,7 +1303,7 @@ class Plugin extends MapasCulturaisPlugin
                 $user->status = 1;
                 $user->save(true);
 
-                /** @var Agent */
+                /** @var User */
                 $old_user = $agent->user;
 
                 $agent->user = $user;
@@ -1230,6 +1319,8 @@ class Plugin extends MapasCulturaisPlugin
                 $this->sendNewUserEmail($user, $old_user);
 
                 $this->log(self::ACTION_SUBAGENT_NEW_USER, $user);
+
+                $summary['new']++;
                 continue;
             }
 
@@ -1249,8 +1340,12 @@ class Plugin extends MapasCulturaisPlugin
 
             // remove agentes que não tenham cpf nem email
             $this->log(self::ACTION_DELETE_EMPTY_SUBAGENT, $agent);
+            $summary['deleted']++;
+
             $this->conn->executeQuery("DELETE FROM agent WHERE id = {$agent->agent_id}");
         }
+
+        $this->log(self::SUMMARY_FIX_SUBAGENTS, $summary);
     }
 
     function agentHasDoc($agent): bool
@@ -1260,15 +1355,27 @@ class Plugin extends MapasCulturaisPlugin
 
     function agentHasEmail($agent): string|false
     {
-        if($agent->agent_email_privado && $agent->agent_email_privado != $agent->user_email) {
-            return $agent->agent_email_privado;
+        $privado = $agent->agent_email_privado;
+        $publico = $agent->agent_email_publico;
+
+        if($privado && $privado != $agent->user_email && !$this->hasUserEmail($privado)) {
+            return $privado;
         }
 
-        if($agent->agent_email_publico && $agent->agent_email_publico != $agent->user_email) {
-            return $agent->agent_email_publico;
+        if($publico && $publico != $agent->user_email && !$this->hasUserEmail($publico)) {
+            return $publico;
         }
 
         return false;
+    }
+
+    function hasUserEmail(string $email): bool
+    {
+        $app = App::i();
+
+        $has = $app->conn->fetchScalar("SELECT count(*) FROM usr WHERE email = :email", ['email' => $email]);
+
+        return (bool) $has;
     }
 
     function agentHasEntities(int $agent_id): bool

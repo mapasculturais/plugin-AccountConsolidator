@@ -30,9 +30,6 @@ class Controller extends MapasCulturaisController
     function GET_index()
     {
         $this->checkPermissions();
-
-        $app = App::i();
-
         $this->render('convert-to-collective');
     }
 
@@ -53,43 +50,17 @@ class Controller extends MapasCulturaisController
         self::$plugin->fixUserProfiles();
     }
 
-    function ALL_calculateAgentSimilarities()
-    {
-        $this->checkPermissions();
-
-        $agents = self::$plugin->fetchAgents();
-        $similarities = self::$plugin->groupSimilarAgents($agents);
-    }
-
     function GET_mergeDuplicatedAgents()
     {
         $this->checkPermissions();
 
-        $app = App::i();
-
-        $agents = self::$plugin->fetchAgents();
-        $similarities = self::$plugin->groupSimilarAgents($agents);
-
-        $total = count($similarities);
-        $count = 0;
-
-        foreach ($similarities as $agents_similarities) {
-            $count++;
-            $agents_similarities->total = $total;
-            $agents_similarities->count = $count;
-            $agents_similarities->percentage = number_format($count / $total * 100, 1, ',') . '%';
-            self::$plugin->log(self::$plugin::ACTION_MERGE_DUPLICATED_AGENTS, $agents_similarities);
-            self::$plugin->mergeAgents($agents_similarities->agents);
-
-            $app->em->clear();
-        }
+        self::$plugin->mergeDuplicatedAgents();
     }
 
     function GET_fixSubagents()
     {
         $this->checkPermissions();
 
-        $app = App::i();
         self::$plugin->fixSubagents();
     }
 

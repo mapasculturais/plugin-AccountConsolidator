@@ -24,22 +24,7 @@ class Job extends \MapasCulturais\Definitions\JobType
 
         $plugin->fixUserProfiles();
 
-        $agents = $plugin->fetchAgents();
-        $similarities = $plugin->groupSimilarAgents($agents);
-
-        $total = count($similarities);
-        $count = 0;
-
-        foreach ($similarities as $agents_similarities) {
-            $count++;
-            $agents_similarities->total = $total;
-            $agents_similarities->count = $count;
-            $agents_similarities->percentage = number_format($count / $total * 100, 1, ',') . '%';
-            $plugin->log($plugin::ACTION_MERGE_DUPLICATED_AGENTS, $agents_similarities);
-            $plugin->mergeAgents($agents_similarities->agents);
-
-            $app->em->clear();
-        }
+        $plugin->mergeDuplicatedAgents();
 
         $plugin->fixSubagents();
 
