@@ -27,13 +27,13 @@ class Controller extends MapasCulturaisController
         }
     }
 
-    function GET_convertToCollective()
+    function GET_index()
     {
         $this->checkPermissions();
 
-        $agents = self::$plugin->analyzePersonNames();
+        $app = App::i();
 
-        $this->render('convert-to-collective', ['agents' => $agents]);
+        $this->render('convert-to-collective');
     }
 
     function POST_convertToCollective()
@@ -91,5 +91,14 @@ class Controller extends MapasCulturaisController
 
         $app = App::i();
         self::$plugin->fixSubagents();
+    }
+
+    function POST_enqueueJob()
+    {
+        $this->checkPermissions();
+
+        $app = App::i();
+
+        $app->enqueueOrReplaceJob(Job::SLUG, ['agent_ids' => $this->data['agents']]);
     }
 }

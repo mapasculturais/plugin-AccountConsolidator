@@ -6,6 +6,8 @@ use Doctrine\DBAL\Exception;
 use MapasCulturais\App;
 use MapasCulturais\Connection;
 use MapasCulturais\Entities\Agent;
+use MapasCulturais\Entities\AgentAgentRelation;
+use MapasCulturais\Entities\RequestAgentRelation;
 use MapasCulturais\Entities\User;
 use MapasCulturais\Plugin as MapasCulturaisPlugin;
 use Symfony\Component\VarDumper\Cloner\VarCloner;
@@ -14,8 +16,11 @@ class Plugin extends MapasCulturaisPlugin
 {
     protected Connection $conn;
 
+    static self $instance;
+
     function __construct(array $config = [])
     {
+        self::$instance = $this;
         $config += [
             'document_metadata_key' => 'cpf',
             'pj_document_metadata_key' => 'cnpj',
@@ -36,7 +41,9 @@ class Plugin extends MapasCulturaisPlugin
             ],
 
             // lista de palavras que fazem um nome ser considerado de pessoa jurídica
-            'colective_terms' => include __DIR__ . '/collective-terms.php'
+            'colective_terms' => include __DIR__ . '/collective-terms.php',
+
+            'supportContact' => ''
 
         ];
 
@@ -60,6 +67,8 @@ class Plugin extends MapasCulturaisPlugin
         $app = App::i();
 
         $app->registerController('account-consolidator', Controller::class);
+
+        $app->registerJobType(new Job(Job::SLUG));
 
         Controller::$plugin = $this;
     }
@@ -236,6 +245,12 @@ class Plugin extends MapasCulturaisPlugin
         $agent_ids = array_unique($agent_ids);
         $ids = implode(',', $agent_ids);
 
+        $skip_user_emails = '';
+        if ($emails = $this->config['skip_user_emails']) {
+            $emails = "'" . implode("','", $emails) . "'";
+            $skip_user_emails = "AND u.email NOT IN ($emails)";
+        }
+
         $agents = $this->conn->fetchAll("SELECT 
                                                 a.user_id, u.email as user_email, u.profile_id, 
                                                 a.id, a.parent_id, unaccent(lower(a.name)) as name, a.type, 
@@ -252,11 +267,11 @@ class Plugin extends MapasCulturaisPlugin
                                                 LEFT JOIN agent_meta _cnpj ON _cnpj.object_id = a.id AND _cnpj.key = 'cnpj'
                                                 JOIN usr u ON u.id = a.user_id 
                                             WHERE a.user_id IN (
-                                                SELECT distinct(u.id) 
-                                                FROM usr u 
-                                                WHERE 
-                                                    a.id in ({$ids})
-                                            )
+                                                    SELECT distinct(u.id) 
+                                                    FROM usr u 
+                                                    WHERE a.id in ({$ids})
+                                                )
+                                                $skip_user_emails
                                             ORDER BY a.id ASC");
 
         foreach ($agents as $agent) {
@@ -1181,23 +1196,26 @@ class Plugin extends MapasCulturaisPlugin
             $has_document = $this->agentHasDoc($agent);
 
             // verifica que tenha algum email
-            $has_email = $this->agentHasEmail($agent);
+            $email = $this->agentHasEmail($agent);
 
             // verifica que não tenha 
             $has_entities = $this->agentHasEntities($agent->agent_id);
 
-            if ($has_document || $has_email) {
+            if ($has_document || $email) {
+                $email = $email ?: "{$agent->agent_doc}@mapas";
+                $agent = $app->repo('Agent')->find($agent->agent_id);
+                
                 // cria usuário e transfere o agente
                 $app->disableAccessControl();
                 $user = new User;
-                $user->email = $agent->agent_email_privado ?: $agent->agent_email_publico ?: "{$agent->agent_doc}@mapas";
+                $user->email = $email;
                 $user->authProvider = '';
                 $user->authUid = $user->email;
                 $user->status = 1;
                 $user->save(true);
 
                 /** @var Agent */
-                $agent = $app->repo('Agent')->find($agent->agent_id);
+                $old_user = $agent->user;
 
                 $agent->user = $user;
                 $agent->save(true);
@@ -1206,6 +1224,10 @@ class Plugin extends MapasCulturaisPlugin
 
                 $app->enqueueEntityToPCacheRecreation($agent);
                 $app->enableAccessControl();
+
+                $this->createAdminRequest($agent, $old_user->profile);
+
+                $this->sendNewUserEmail($user, $old_user);
 
                 $this->log(self::ACTION_SUBAGENT_NEW_USER, $user);
                 continue;
@@ -1236,9 +1258,17 @@ class Plugin extends MapasCulturaisPlugin
         return (bool) $agent->agent_doc;
     }
 
-    function agentHasEmail($agent): bool
+    function agentHasEmail($agent): string|false
     {
-        return $agent->agent_email_publico || $agent->agent_email_privado;
+        if($agent->agent_email_privado && $agent->agent_email_privado != $agent->user_email) {
+            return $agent->agent_email_privado;
+        }
+
+        if($agent->agent_email_publico && $agent->agent_email_publico != $agent->user_email) {
+            return $agent->agent_email_publico;
+        }
+
+        return false;
     }
 
     function agentHasEntities(int $agent_id): bool
@@ -1286,4 +1316,53 @@ class Plugin extends MapasCulturaisPlugin
         $num = $this->conn->fetchScalar("SELECT COUNT(id) FROM registration WHERE agent_id = {$agent_id}");
         return (bool) $num;
     }
+
+    function createAdminRequest(Agent $agent, Agent $admin)
+    {
+        $agent_relation = new AgentAgentRelation;
+        $agent_relation->agent = $admin;
+        $agent_relation->owner = $agent;
+        $agent_relation->status = AgentAgentRelation::STATUS_PENDING;
+        $agent_relation->group = Agent::AGENT_RELATION_ADMIN_GROUP;
+        $agent_relation->save(true);
+
+        $request = new RequestAgentRelation($admin->user);
+        $request->setAgentRelation($agent_relation);
+        $request->destination = $agent;
+        $request->origin = $admin;
+        $request->save(true);
+    }
+
+    function sendNewUserEmail(User $user, User $old_user)
+    {
+        $app = App::i();
+
+        $email_params = [
+            'userName' => $user->profile->name,
+            'oldUserName' => $old_user->profile->name,
+            'supportContact' => $this->config['supportContact']
+        ];
+
+        $body = $app->renderMustacheTemplate('account-consolidator--new-user.html', $email_params);
+
+        $app->createAndSendMailMessage([
+            'body' => $body,
+            'to' => $user->email
+        ]);
+    }
+
+/*
+Olá {{userName}},
+
+Identificamos que você tem um perfil no {{siteName}}, criada e administrada por {{oldUserName}}
+
+Para garantir a segurança em relação a teus dados e privacidade, as regras de uso da plataforma foram alteradas. 
+
+Agora, você precisa ser responsável por sua própria conta. Para acessá-la, entre no <a href="{{baseUrl}}">{{siteName}}</a>, inclua o seu endereço de email que está nessa mensagem e peça a recuperação de senha.
+
+Após o login, você precisará aceitar os termos de uso da plataforma. Se quiser manter o {{oldUserName}} no controle do seu perfil, é possível conceder essa autorização por meio do Painel. 
+
+Caso escolha por excluir a conta ou estiver com quaisquer dúvidas sobre o novo protocolo, entre em contato com o suporte da plataforma
+*/
+
 }
