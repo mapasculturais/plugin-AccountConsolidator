@@ -41,6 +41,6 @@ use MapasCulturais\i;
                     </tr>
             </tbody>
         </table>
-        <button type="submit" class="button button--primary">transformar em agentes coletivos</button>
+        <button type="submit" class="button button--primary">Iniciar consolidação das contas</button>
     </form>
 </div>
