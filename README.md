@@ -45,21 +45,21 @@ Estratégia de correção hierárquica:
 ## Configuração  
 
 - **Metadados de documentos**  
-  - Pessoa física: `document_metadata_key = 'cpf'`  
-  - Pessoa jurídica: `pj_document_metadata_key = 'cnpj'`  
+  - `document_metadata_key = 'cpf'` - Pessoa física
+  - `pj_document_metadata_key = 'cnpj'` - Pessoa jurídica
 
 - **Parâmetros de comparação**  
-  - Similaridade mínima: `similarity_cutoff = 67` (67%)  
-  - Emails ignorados: `skip_user_emails = []`  
-  - Termos removidos: `skip_terms = ['(in memoriam)']`  
-  - Termos obrigatórios compartilhados: `required_common_terms = ['mei']`  
+  - `similarity_cutoff = 67` (67%) - Similaridade mínima
+  - `skip_user_emails = []` - Os agentes destes usuários não serão processado
+  - `skip_terms = ['(in memoriam)']` - Termos removidos no momento da comparação de similaridade
+  - `required_common_terms = ['mei']` - Termos obrigatórios compartilhados, que devem estar em ambos os lados da comparação
 
 - **Classificação de agentes**  
-  - Termos indicativos de PF: `person_terms = ['do coco']`  
-  - Termos indicativos de PJ: `colective_terms = include __DIR__ . '/collective-terms.php'`  
+  - `person_terms = ['do coco']` - Termos que indicam que um agente é pessoa física
+  - `colective_terms = include __DIR__ . '/collective-terms.php'` - Termos que inficam que o agente é pessoa jurídica
 
 - **Suporte**  
-  - Contato para suporte: `supportContact = ''`  
+  - `supportContact = ''` - Contato para suporte
 
 ## Como Usar  
 1. Acesse: `https://seu.dominio/account-consolidator`  
