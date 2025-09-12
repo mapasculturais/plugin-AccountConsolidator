@@ -590,6 +590,7 @@ class Plugin extends MapasCulturaisPlugin
         if ($user_def->new_profile_agente) {
             $new_profile_agent = $app->repo('Agent')->find($user_def->new_profile_agente->id);
             $new_profile_agent->type = 1;
+            $new_profile_agent->disableUpdateTimestamp();
             $new_profile_agent->save(true);
             $this->log(self::ACTION_FIX_USER_PROFILE__TYPE, $new_profile_agent);
         } else {
@@ -948,6 +949,7 @@ class Plugin extends MapasCulturaisPlugin
             $agent_to_preserve->$key = $value;
         }
 
+        $agent_to_preserve->disableUpdateTimestamp();
         $agent_to_preserve->save(true);
 
         $agents_to_delete = array_filter($agents, fn($ag) => $ag->agent_id != $agent_to_preserve->id);
@@ -1313,6 +1315,7 @@ class Plugin extends MapasCulturaisPlugin
                 $old_user = $agent->user;
 
                 $agent->user = $user;
+                $agent->disableUpdateTimestamp();
                 $agent->save(true);
                 $agent->setAsUserProfile();
                 $agent->save(true);
