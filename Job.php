@@ -13,6 +13,9 @@ class Job extends \MapasCulturais\Definitions\JobType
 
     protected function _execute(EntitiesJob $job) { 
         \Notifications\Module::$disableMailMessages = true;
+        $app = App::i();
+
+        $app->disableAccessControl();
 
         $plugin = Plugin::$instance;
 
