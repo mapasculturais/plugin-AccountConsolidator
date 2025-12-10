@@ -35,7 +35,7 @@ use MapasCulturais\i;
                         <td><label :for="id(agent)">{{agent.profile_id ? 'SIM' : ''}}</label></td>
                         <td><label :for="id(agent)">{{agent.cpf}}</label></td>
                         <td><label :for="id(agent)">{{agent.cnpj}}</label></td>
-                        <td><input type="checkbox" :id="id(agent)" v-model="agent.checked"></td>
+                        <td><input type="checkbox" :id="id(agent)" v-model="agent.checked" @change="check(agent, $event)"></td>
                         <td><label :for="id(agent)">{{agent.name}}</label></td>
                         <td><label :for="id(agent)">{{agent.nome_completo}}</label></td>
                     </tr>

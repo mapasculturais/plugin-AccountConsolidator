@@ -72,4 +72,59 @@ class Controller extends MapasCulturaisController
 
         $app->enqueueOrReplaceJob(Job::SLUG, ['agent_ids' => $this->data['agents']]);
     }
+
+    function POST_saveCheckboxState()
+    {
+        $this->checkPermissions();
+
+        $agent_id = (int) ($this->data['agentId'] ?? 0);
+        $checked = (bool) ($this->data['checked'] ?? false);
+
+        if (!$agent_id) {
+            return $this->json(['ok' => false, 'message' => 'agentId inválido'], 400);
+        }
+
+        $dir = PRIVATE_FILES_PATH . 'account-consolidator/';
+        mkdir($dir, 0777, true);
+        $file = $dir . 'unchecked-agents.json';
+
+        $unchecked = [];
+        if (is_file($file)) {
+            $decoded = json_decode(@file_get_contents($file), true);
+            if (is_array($decoded)) {
+                $unchecked = $decoded;
+            }
+        }
+
+        if ($checked) {
+            $unchecked = array_values(array_filter($unchecked, fn($id) => (int) $id !== $agent_id));
+        } else {
+            if (!in_array($agent_id, $unchecked, true)) {
+                $unchecked[] = $agent_id;
+            }
+        }
+
+        file_put_contents($file, json_encode($unchecked), LOCK_EX);
+
+        return $this->json(['ok' => true, 'unchecked' => $unchecked]);
+    }
+
+    function GET_loadCheckboxState()
+    {
+        $this->checkPermissions();
+
+        $file = PRIVATE_FILES_PATH . 'account-consolidator/unchecked-agents.json';
+
+        if (!is_file($file)) {
+            return $this->json(['unchecked' => []]);
+        }
+
+        $decoded = json_decode(file_get_contents($file), true);
+
+        if (!is_array($decoded)) {
+            return $this->json(['unchecked' => []]);
+        }
+
+        return $this->json(['unchecked' => array_values($decoded)]);
+    }
 }
