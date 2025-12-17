@@ -62,6 +62,7 @@ class Plugin extends MapasCulturaisPlugin
         });
     }
 
+    
     function register()
     {
         $app = App::i();
@@ -81,6 +82,8 @@ class Plugin extends MapasCulturaisPlugin
     const ACTION_SUBAGENT_NEW_USER = 'subagent new user';
     const ACTION_FIX_SUBAGENT = 'fix subagent';
     const ACTION_TRANSFER_ENTITIES_OF_SUBAGENT = 'transfer subagent entities';
+    const ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY = 'transfer subagent entities - entity';
+
     const ACTION_FIX_USER_PROFILE = 'corrige agente de perfil';
     const ACTION_FIX_USER_PROFILE__CASE = 'corrige agente de perfil - casos';
     const ACTION_FIX_USER_PROFILE__TYPE = 'corrige agente de perfil - corrige tipo';
@@ -180,11 +183,17 @@ class Plugin extends MapasCulturaisPlugin
                 break;
 
             case self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT:
-                $this->logLine($action_type, "-> transferindo entidades");
+                $this->logLine($action_type, "Transferindo entidades do agente #{$data->from->id} ({$data->from->name}) para o agente #{$data->to->id} ({$data->to->name})");
+                break;
+
+            case self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY:
+                $this->logLine(
+                    $data->logFile, 
+                    " -> transferindo {$data->type}: #{$data->id} ({$data->name})");
                 break;
 
             case self::ACTION_DELETE_EMPTY_SUBAGENT:
-                $this->logLine($action_type, "-> removido subagente");
+                $this->logLine($action_type, "-> removido subagente #{$data->agent_id} ({$data->agent_name})");
                 break;
 
             case self::SUMMARY_CONVERT_TO_COLLECTIVE:
@@ -961,12 +970,12 @@ class Plugin extends MapasCulturaisPlugin
         foreach ($agents_to_delete as $agent_to_delete) {
             $this->log(self::ACTION_MERGE_AGENTS, ['to_delete' => $agent_to_delete, 'to_preserve' => $agent_to_preserve]);
 
-            $this->transferSubagents($agent_to_delete->agent_id, $agent_to_preserve);
-            $this->transferSpaces($agent_to_delete->agent_id, $agent_to_preserve);
-            $this->transferProjects($agent_to_delete->agent_id, $agent_to_preserve);
-            $this->transferOpportunities($agent_to_delete->agent_id, $agent_to_preserve);
-            $this->transferEvents($agent_to_delete->agent_id, $agent_to_preserve);
-            $this->transferRegistrations($agent_to_delete->agent_id, $agent_to_preserve);
+            $this->transferSubagents($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
+            $this->transferSpaces($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
+            $this->transferProjects($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
+            $this->transferOpportunities($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
+            $this->transferEvents($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
+            $this->transferRegistrations($agent_to_delete->agent_id, $agent_to_preserve, self::ACTION_MERGE_AGENTS);
 
             $this->mergeMetaLists($agent_to_delete->agent_id, $agent_to_preserve);
             $this->mergeFiles($agent_to_delete->agent_id, $agent_to_preserve);
@@ -991,7 +1000,7 @@ class Plugin extends MapasCulturaisPlugin
         }
     }
 
-    public function transferAgentRelations(int $from_agent_id, $to_agent)
+    public function transferAgentRelations(int $from_agent_id, $to_agent, string $log_file)
     {
         $this->conn->executeQuery(
             '
@@ -1023,8 +1032,23 @@ class Plugin extends MapasCulturaisPlugin
             ", ['id' => $to_agent->id]);
     }
 
-    public function transferSubagents(int $from_agent_id, $to_agent)
+    public function transferSubagents(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT id, name FROM agent WHERE parent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'AGENTE';
+$entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+
         $this->conn->executeQuery(
             '
             UPDATE agent 
@@ -1040,8 +1064,23 @@ class Plugin extends MapasCulturaisPlugin
         );
     }
 
-    public function transferSpaces(int $from_agent_id, $to_agent)
+    public function transferSpaces(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT id, name FROM space WHERE agent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'ESPAÇO';
+            $entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+
         $this->conn->executeQuery(
             "
             UPDATE space 
@@ -1054,8 +1093,23 @@ class Plugin extends MapasCulturaisPlugin
         );
     }
 
-    public function transferProjects(int $from_agent_id, $to_agent)
+    public function transferProjects(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT id, name FROM project WHERE agent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'PROJETO';
+            $entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+
         $this->conn->executeQuery(
             "
             UPDATE project 
@@ -1068,8 +1122,23 @@ class Plugin extends MapasCulturaisPlugin
         );
     }
 
-    public function transferOpportunities(int $from_agent_id, $to_agent)
+    public function transferOpportunities(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT id, name FROM opportunity WHERE agent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'OPORTUNIDADE';
+            $entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+        
         $this->conn->executeQuery(
             "
             UPDATE opportunity 
@@ -1095,8 +1164,24 @@ class Plugin extends MapasCulturaisPlugin
         );
     }
 
-    public function transferEvents(int $from_agent_id, $to_agent)
+    public function transferEvents(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT id, name FROM event WHERE agent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'EVENTO';
+            $entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+        
+        
         $this->conn->executeQuery(
             "
             UPDATE event 
@@ -1109,8 +1194,23 @@ class Plugin extends MapasCulturaisPlugin
         );
     }
 
-    public function transferRegistrations(int $from_agent_id, $to_agent)
+    public function transferRegistrations(int $from_agent_id, $to_agent, string $log_file)
     {
+        $entities = $this->conn->fetchAll(
+            query: "SELECT r.number as id, o.name FROM registration r LEFT JOIN opportunity o ON o.id = r.opportunity_id WHERE r.agent_id = :from",
+            params: ['from' => $from_agent_id],
+        );
+
+        foreach($entities as $entity) {
+            $entity['type'] = 'INSCRIÇÃO';
+            $entity['logFile'] = $log_file;
+
+            $this->log(
+                action_type: self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT_ENTITY,
+                data: (object) $entity,
+            );
+        }
+        
         $this->conn->executeQuery(
             "
             UPDATE registration 
@@ -1119,21 +1219,6 @@ class Plugin extends MapasCulturaisPlugin
             [
                 'from' => $from_agent_id,
                 'to' => $to_agent->id
-            ]
-        );
-    }
-
-    public function transferEvaluations($from_user, $to_user)
-    {
-        /** @todo corrigir */
-        $this->conn->executeQuery(
-            "
-            UPDATE registration_evaluation 
-            SET user_id = :to
-            WHERE agent_id = :from",
-            [
-                'from' => $from_user->agent_id,
-                'to' => $to_user->id
             ]
         );
     }
@@ -1332,17 +1417,20 @@ class Plugin extends MapasCulturaisPlugin
             }
 
             if ($has_entities) {
-                $this->log(self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT, $agent);
+                $this->log(
+                    self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT, 
+                    (object) ['from' => $agent, 'to' => $user_profile]
+                );
 
                 $user_profile = $app->repo('Agent')->find($agent->user_profile_id);
 
                 // transfere as entidades para o agente principal do usuário
-                $this->transferSubagents($agent->agent_id, $user_profile);
-                $this->transferSpaces($agent->agent_id, $user_profile);
-                $this->transferProjects($agent->agent_id, $user_profile);
-                $this->transferOpportunities($agent->agent_id, $user_profile);
-                $this->transferEvents($agent->agent_id, $user_profile);
-                $this->transferRegistrations($agent->agent_id, $user_profile);
+                $this->transferSubagents($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
+                $this->transferSpaces($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
+                $this->transferProjects($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
+                $this->transferOpportunities($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
+                $this->transferEvents($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
+                $this->transferRegistrations($agent->agent_id, $user_profile, self::ACTION_TRANSFER_ENTITIES_OF_SUBAGENT);
             }
 
             // remove agentes que não tenham cpf nem email
